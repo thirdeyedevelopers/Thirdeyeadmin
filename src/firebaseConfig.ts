@@ -10,3 +10,6 @@ export const firebaseConfig = {
 };
 
 export const functionsRegion = "asia-south1";
+
+// App Check (Fraud Defense / reCAPTCHA Enterprise) site key for this website. Public by design.
+export const appCheckSiteKey = "6Lfb-ikuAAAAABm_Fbxd1Oiw7STEi6m-RlQOMLSr";

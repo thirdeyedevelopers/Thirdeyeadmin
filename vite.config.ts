@@ -9,7 +9,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          firebase: ["firebase/app", "firebase/auth", "firebase/firestore", "firebase/functions"],
+          firebase: ["firebase/app", "firebase/app-check", "firebase/auth", "firebase/firestore", "firebase/functions"],
           charts: ["recharts"],
         },
       },
