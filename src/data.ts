@@ -41,6 +41,9 @@ export interface Daily {
 
 export interface AppUser {
   id: string;
+  name?: string;
+  email?: string;
+  provider?: string;
   firstSeen?: Date;
   lastSeen?: Date;
   lastFeature?: string;
@@ -86,6 +89,9 @@ const mapDaily = (id: string, d: DocumentData): Daily => ({
 
 const mapUser = (id: string, d: DocumentData): AppUser => ({
   id,
+  name: typeof d.name === "string" ? d.name : undefined,
+  email: typeof d.email === "string" ? d.email : undefined,
+  provider: typeof d.provider === "string" ? d.provider : undefined,
   firstSeen: toDate(d.firstSeen),
   lastSeen: toDate(d.lastSeen),
   lastFeature: d.lastFeature,
@@ -211,6 +217,23 @@ export function liveUsers(usage: Usage[], now: number) {
 export interface Summary {
   totalUsers: number;
   anonymousUsers: number;
+  googleUsers?: number;
+  emailUsers?: number;
+}
+
+const PROVIDERS: Record<string, string> = { "google.com": "Google", password: "Email", anonymous: "Guest" };
+export const providerLabel = (p?: string) => (p ? PROVIDERS[p] ?? p : "Guest");
+
+/** What to call a user everywhere: name, else email, else a short guest ID. */
+export function displayName(u: Pick<AppUser, "id" | "name" | "email"> | undefined, uid: string) {
+  return u?.name || u?.email || `Guest ${uid.slice(0, 8)}`;
+}
+
+/** Live lookup of every user's name, for pages that list requests. */
+export function useUserNames() {
+  const users = useUsers(5000);
+  const byId = new Map(users.data.map((u) => [u.id, u]));
+  return (uid: string) => displayName(byId.get(uid), uid);
 }
 
 export function useSummary() {

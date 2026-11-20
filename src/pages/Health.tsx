@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { useDaily, useFailures, useRecentUsage } from "../data";
-import { dayKeyLabel, fmtDateTime, fmtMs, fmtNumber, fmtPercent, lastDayKeys, shortId } from "../format";
+import { useDaily, useFailures, useRecentUsage, useUserNames } from "../data";
+import { dayKeyLabel, fmtDateTime, fmtMs, fmtNumber, fmtPercent, lastDayKeys } from "../format";
 import { useTheme } from "../theme";
 import { ChartFigure, ChartTooltip, DataTable, ErrorNote, Loading, Page, Panel } from "../components/ui";
 
@@ -20,6 +20,7 @@ export default function Health() {
   const daily = useDaily(keys[0]);
   const recent = useRecentUsage(SAMPLE);
   const failures = useFailures(50);
+  const nameOf = useUserNames();
   const { colors } = useTheme();
 
   const byDay = new Map(daily.data.map((d) => [d.id, d]));
@@ -103,7 +104,7 @@ export default function Health() {
               { key: "at", label: "Time", render: (r) => fmtDateTime(r.at) },
               { key: "fn", label: "Function", render: (r) => <span className="mono">{r.fn}{r.action ? ` · ${r.action}` : ""}</span> },
               { key: "code", label: "Error", render: (r) => <span className="mono">{r.errCode ?? "unknown"}</span> },
-              { key: "uid", label: "User", render: (r) => <Link to={`/users/${r.uid}`} className="mono">User {shortId(r.uid)}</Link> },
+              { key: "uid", label: "User", render: (r) => <Link to={`/users/${r.uid}`}>{nameOf(r.uid)}</Link> },
               { key: "ms", label: "Time taken", num: true, render: (r) => fmtMs(r.ms) },
             ]}
           />

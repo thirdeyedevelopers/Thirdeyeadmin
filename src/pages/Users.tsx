@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { AppUser, FEATURES, topFeature, useNow, useUsers } from "../data";
-import { fmtDateTime, fmtNumber, relative, shortId } from "../format";
+import { AppUser, displayName, FEATURES, providerLabel, topFeature, useNow, useUsers } from "../data";
+import { fmtDateTime, fmtNumber, relative } from "../format";
 import { ErrorNote, Loading, Page, Panel } from "../components/ui";
 
 type SortKey = "lastSeen" | "firstSeen" | "calls" | "errors";
@@ -25,7 +25,7 @@ export default function Users() {
 
   const term = search.trim().toLowerCase();
   const rows = users.data
-    .filter((u) => !term || u.id.toLowerCase().includes(term))
+    .filter((u) => !term || [u.id, u.name, u.email].some((v) => v?.toLowerCase().includes(term)))
     .filter((u) => !feature || (u.features[feature] ?? 0) > 0)
     .sort((a, b) => (value(a, sort.key) - value(b, sort.key)) * (sort.desc ? -1 : 1));
 
@@ -42,12 +42,12 @@ export default function Users() {
   };
 
   return (
-    <Page title="Users" intro="Every app install that has used an online feature. Users are anonymous; the ID is the Firebase user ID.">
+    <Page title="Users" intro="Everyone who has used an online feature. Names and emails come from their Third Eye sign-in.">
       <ErrorNote error={users.error} />
       <Panel title={`${fmtNumber(rows.length)} of ${fmtNumber(users.data.length)} users`} id="users-list">
         <div className="toolbar">
           <div className="field">
-            <label htmlFor="user-search">Search by user ID</label>
+            <label htmlFor="user-search">Search by name, email or ID</label>
             <input id="user-search" type="search" value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" />
           </div>
           <div className="field">
@@ -75,6 +75,7 @@ export default function Users() {
               <thead>
                 <tr>
                   <th scope="col">User</th>
+                  <th scope="col">Sign-in</th>
                   {header("lastSeen", false)}
                   {header("firstSeen", false)}
                   {header("calls")}
@@ -86,10 +87,10 @@ export default function Users() {
                 {rows.map((u) => (
                   <tr key={u.id}>
                     <th scope="row">
-                      <Link to={`/users/${u.id}`} className="mono">
-                        User {shortId(u.id)}
-                      </Link>
+                      <Link to={`/users/${u.id}`}>{displayName(u, u.id)}</Link>
+                      {u.name && u.email && <div className="muted" style={{ fontWeight: 400, fontSize: "0.875rem" }}>{u.email}</div>}
                     </th>
+                    <td>{providerLabel(u.provider)}</td>
                     <td title={fmtDateTime(u.lastSeen)}>{relative(u.lastSeen, now)}</td>
                     <td>{fmtDateTime(u.firstSeen)}</td>
                     <td className="num">{fmtNumber(u.calls)}</td>

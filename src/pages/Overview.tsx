@@ -57,7 +57,11 @@ export default function Overview() {
         <Stat
           label="Total users"
           value={summary.data ? fmtNumber(summary.data.totalUsers) : fmtNumber(users.data.length)}
-          note={summary.data ? "All app installs that signed in" : "Users who used an online feature"}
+          note={
+            summary.data
+              ? `${fmtNumber(summary.data.googleUsers ?? 0)} Google, ${fmtNumber(summary.data.emailUsers ?? 0)} email, ${fmtNumber(summary.data.anonymousUsers)} old guest`
+              : "Users who used an online feature"
+          }
         />
         <Stat label="Active today" value={fmtNumber(today?.activeUsers ?? 0)} note={`${fmtNumber(newToday)} new today`} />
         <Stat

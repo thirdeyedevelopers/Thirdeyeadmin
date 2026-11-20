@@ -1,6 +1,6 @@
 import { Link, useParams } from "react-router-dom";
-import { FEATURES, useNow, useUser, useUserUsage } from "../data";
-import { fmtDateTime, fmtMs, fmtNumber, fmtPercent, relative, shortId } from "../format";
+import { displayName, FEATURES, providerLabel, useNow, useUser, useUserUsage } from "../data";
+import { fmtDateTime, fmtMs, fmtNumber, fmtPercent, relative } from "../format";
 import { DataTable, ErrorNote, Loading, Page, Panel, Stat, Stats, StatusBadge } from "../components/ui";
 
 export default function UserDetail() {
@@ -15,8 +15,13 @@ export default function UserDetail() {
 
   return (
     <Page
-      title={`User ${shortId(uid)}`}
-      intro={<span className="mono">Full ID: {uid}</span>}
+      title={user.loading ? "User" : displayName(u ?? undefined, uid)}
+      intro={
+        <>
+          {u?.email && <>{u.email} · </>}
+          {providerLabel(u?.provider)} sign-in · <span className="mono">ID {uid}</span>
+        </>
+      }
       actions={
         <Link className="btn secondary" to="/users">
           All users
