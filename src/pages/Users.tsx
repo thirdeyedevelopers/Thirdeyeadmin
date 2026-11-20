@@ -1,33 +1,45 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { AppUser, displayName, FEATURES, providerLabel, topFeature, useNow, useUsers } from "../data";
+import { Account, displayName, FEATURES, providerLabel, topFeature, useAccounts, useNow } from "../data";
 import { fmtDateTime, fmtNumber, relative } from "../format";
-import { ErrorNote, Loading, Page, Panel } from "../components/ui";
+import { ErrorNote, Loading, Page, Panel, Stat, Stats } from "../components/ui";
 
-type SortKey = "lastSeen" | "firstSeen" | "calls" | "errors";
+type SortKey = "lastActive" | "created" | "calls" | "errors";
 
 const SORT_LABELS: Record<SortKey, string> = {
-  lastSeen: "Last seen",
-  firstSeen: "First seen",
+  lastActive: "Last active",
+  created: "Joined",
   calls: "Requests",
   errors: "Failed",
 };
 
-const value = (u: AppUser, k: SortKey) =>
-  k === "lastSeen" ? u.lastSeen?.getTime() ?? 0 : k === "firstSeen" ? u.firstSeen?.getTime() ?? 0 : u[k];
+/** Most recent of: last feature use, last sign-in, last time the app refreshed its login. */
+const lastActive = (u: Account) =>
+  Math.max(u.lastSeen?.getTime() ?? 0, u.lastSignIn?.getTime() ?? 0, u.lastActive?.getTime() ?? 0);
+
+const value = (u: Account, k: SortKey) =>
+  k === "lastActive" ? lastActive(u) : k === "created" ? u.created?.getTime() ?? u.firstSeen?.getTime() ?? 0 : u[k];
 
 export default function Users() {
-  const users = useUsers(2000);
+  const accounts = useAccounts();
   const now = useNow(30_000);
   const [search, setSearch] = useState("");
   const [feature, setFeature] = useState("");
-  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "lastSeen", desc: true });
+  const [signIn, setSignIn] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "lastActive", desc: true });
 
+  const all = accounts.data;
   const term = search.trim().toLowerCase();
-  const rows = users.data
+  const rows = all
     .filter((u) => !term || [u.id, u.name, u.email].some((v) => v?.toLowerCase().includes(term)))
     .filter((u) => !feature || (u.features[feature] ?? 0) > 0)
+    .filter((u) => !signIn || u.provider === signIn)
     .sort((a, b) => (value(a, sort.key) - value(b, sort.key)) * (sort.desc ? -1 : 1));
+
+  const day = 86_400_000;
+  const active7 = all.filter((u) => now - lastActive(u) < 7 * day).length;
+  const new7 = all.filter((u) => u.created && now - u.created.getTime() < 7 * day).length;
+  const usedFeature = all.filter((u) => u.calls > 0).length;
 
   const header = (key: SortKey, num = true) => {
     const active = sort.key === key;
@@ -42,13 +54,37 @@ export default function Users() {
   };
 
   return (
-    <Page title="Users" intro="Everyone who has used an online feature. Names and emails come from their Third Eye sign-in.">
-      <ErrorNote error={users.error} />
-      <Panel title={`${fmtNumber(rows.length)} of ${fmtNumber(users.data.length)} users`} id="users-list">
+    <Page
+      title="Users"
+      intro="Every Third Eye account, from Firebase sign-in, with how much each person uses the app."
+      actions={
+        <button className="btn secondary" onClick={accounts.refresh} disabled={accounts.loading}>
+          {accounts.loading ? "Loading…" : "Refresh"}
+        </button>
+      }
+    >
+      <ErrorNote error={accounts.error} />
+      <Stats label="Account numbers">
+        <Stat label="Accounts" value={fmtNumber(all.filter((u) => u.inAuth).length)} />
+        <Stat label="Active in 7 days" value={fmtNumber(active7)} />
+        <Stat label="Joined in 7 days" value={fmtNumber(new7)} />
+        <Stat label="Used a feature" value={fmtNumber(usedFeature)} note="Since usage recording started" />
+      </Stats>
+
+      <Panel title={`${fmtNumber(rows.length)} of ${fmtNumber(all.length)} users`} id="users-list">
         <div className="toolbar">
           <div className="field">
             <label htmlFor="user-search">Search by name, email or ID</label>
             <input id="user-search" type="search" value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" />
+          </div>
+          <div className="field">
+            <label htmlFor="user-signin">Sign-in type</label>
+            <select id="user-signin" value={signIn} onChange={(e) => setSignIn(e.target.value)}>
+              <option value="">All</option>
+              <option value="google.com">Google</option>
+              <option value="password">Email</option>
+              <option value="anonymous">Guest</option>
+            </select>
           </div>
           <div className="field">
             <label htmlFor="user-feature">Used feature</label>
@@ -61,13 +97,13 @@ export default function Users() {
           </div>
         </div>
         <p className="sr-only" role="status">
-          {users.loading ? "" : `${rows.length} users shown`}
+          {accounts.loading ? "" : `${rows.length} users shown`}
         </p>
 
-        {users.loading ? (
+        {accounts.loading && all.length === 0 ? (
           <Loading what="users" />
         ) : rows.length === 0 ? (
-          <p className="empty">{users.data.length ? "No users match this search." : "No users yet. They appear after their first online request."}</p>
+          <p className="empty">{all.length ? "No users match these filters." : "No accounts yet."}</p>
         ) : (
           <div className="table-wrap">
             <table>
@@ -76,28 +112,33 @@ export default function Users() {
                 <tr>
                   <th scope="col">User</th>
                   <th scope="col">Sign-in</th>
-                  {header("lastSeen", false)}
-                  {header("firstSeen", false)}
+                  {header("lastActive", false)}
+                  {header("created", false)}
                   {header("calls")}
                   <th scope="col">Most used</th>
                   {header("errors")}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((u) => (
-                  <tr key={u.id}>
-                    <th scope="row">
-                      <Link to={`/users/${u.id}`}>{displayName(u, u.id)}</Link>
-                      {u.name && u.email && <div className="muted" style={{ fontWeight: 400, fontSize: "0.875rem" }}>{u.email}</div>}
-                    </th>
-                    <td>{providerLabel(u.provider)}</td>
-                    <td title={fmtDateTime(u.lastSeen)}>{relative(u.lastSeen, now)}</td>
-                    <td>{fmtDateTime(u.firstSeen)}</td>
-                    <td className="num">{fmtNumber(u.calls)}</td>
-                    <td>{topFeature(u.features)}</td>
-                    <td className="num">{fmtNumber(u.errors)}</td>
-                  </tr>
-                ))}
+                {rows.map((u) => {
+                  const last = lastActive(u);
+                  return (
+                    <tr key={u.id}>
+                      <th scope="row">
+                        <Link to={`/users/${u.id}`}>{displayName(u, u.id)}</Link>
+                        {u.name && u.email && <div className="muted" style={{ fontWeight: 400, fontSize: "0.875rem" }}>{u.email}</div>}
+                        {!u.inAuth && <div className="muted" style={{ fontWeight: 400, fontSize: "0.875rem" }}>Account deleted</div>}
+                        {u.disabled && <span className="badge fail">Disabled</span>}
+                      </th>
+                      <td>{providerLabel(u.provider)}</td>
+                      <td title={last ? fmtDateTime(new Date(last)) : undefined}>{last ? relative(new Date(last), now) : "Never"}</td>
+                      <td>{fmtDateTime(u.created ?? u.firstSeen)}</td>
+                      <td className="num">{fmtNumber(u.calls)}</td>
+                      <td>{u.calls ? topFeature(u.features) : "None yet"}</td>
+                      <td className="num">{fmtNumber(u.errors)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -229,11 +229,115 @@ export function displayName(u: Pick<AppUser, "id" | "name" | "email"> | undefine
   return u?.name || u?.email || `Guest ${uid.slice(0, 8)}`;
 }
 
-/** Live lookup of every user's name, for pages that list requests. */
+interface AuthUserRaw {
+  uid: string;
+  email: string | null;
+  name: string | null;
+  provider: string;
+  created: number | null;
+  lastSignIn: number | null;
+  lastActive: number | null;
+  disabled: boolean;
+  verified: boolean;
+}
+
+/** A Third Eye account (from Firebase Authentication) joined with its usage stats (from Firestore). */
+export interface Account extends AppUser {
+  created?: Date;
+  lastSignIn?: Date;
+  lastActive?: Date;
+  disabled?: boolean;
+  /** False for usage left behind by an account that was deleted. */
+  inAuth: boolean;
+}
+
+const date = (ms: number | null) => (ms ? new Date(ms) : undefined);
+
+let authCache: { at: number; users: AuthUserRaw[] } | null = null;
+
+/** Every sign-in account, fetched through the admin-only `adminUsers` function. Cached for a minute. */
+export function useAuthUsers() {
+  const [state, setState] = useState<Live<AuthUserRaw[]> & { refresh: () => void }>({
+    data: authCache?.users ?? [],
+    loading: !authCache,
+    refresh: () => {},
+  });
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (authCache && tick === 0 && Date.now() - authCache.at < 60_000) {
+      setState((s) => ({ ...s, data: authCache!.users, loading: false }));
+      return;
+    }
+    setState((s) => ({ ...s, loading: true }));
+    httpsCallable<void, { users: AuthUserRaw[] }>(functions, "adminUsers")()
+      .then((r) => {
+        authCache = { at: Date.now(), users: r.data.users };
+        setState((s) => ({ ...s, data: r.data.users, loading: false, error: undefined }));
+      })
+      .catch((e) => setState((s) => ({ ...s, loading: false, error: describeError(e) })));
+  }, [tick]);
+  return { ...state, refresh: () => setTick((t) => t + 1) };
+}
+
+export function useAccounts() {
+  const auth = useAuthUsers();
+  const usage = useUsers(5000);
+  const stats = new Map(usage.data.map((u) => [u.id, u]));
+  const accounts: Account[] = auth.data.map((a) => {
+    const s = stats.get(a.uid);
+    return {
+      id: a.uid,
+      name: a.name ?? s?.name,
+      email: a.email ?? s?.email,
+      provider: a.provider,
+      firstSeen: s?.firstSeen,
+      lastSeen: s?.lastSeen,
+      lastFeature: s?.lastFeature,
+      calls: s?.calls ?? 0,
+      errors: s?.errors ?? 0,
+      features: s?.features ?? {},
+      created: date(a.created),
+      lastSignIn: date(a.lastSignIn),
+      lastActive: date(a.lastActive),
+      disabled: a.disabled,
+      inAuth: true,
+    };
+  });
+  if (!auth.loading && !auth.error) {
+    const known = new Set(auth.data.map((a) => a.uid));
+    for (const s of usage.data) if (!known.has(s.id)) accounts.push({ ...s, inAuth: false });
+  }
+  return {
+    data: accounts,
+    loading: auth.loading || usage.loading,
+    error: auth.error || usage.error,
+    refresh: auth.refresh,
+  };
+}
+
+/** Lookup of every user's name, for pages that list requests. */
 export function useUserNames() {
-  const users = useUsers(5000);
-  const byId = new Map(users.data.map((u) => [u.id, u]));
+  const accounts = useAccounts();
+  const byId = new Map(accounts.data.map((u) => [u.id, u]));
   return (uid: string) => displayName(byId.get(uid), uid);
+}
+
+/** One account's sign-in details, or undefined while loading or if it no longer exists. */
+export function useAccount(uid: string) {
+  const auth = useAuthUsers();
+  const a = auth.data.find((x) => x.uid === uid);
+  return {
+    loading: auth.loading,
+    data: a && {
+      name: a.name ?? undefined,
+      email: a.email ?? undefined,
+      provider: a.provider,
+      created: date(a.created),
+      lastSignIn: date(a.lastSignIn),
+      lastActive: date(a.lastActive),
+      disabled: a.disabled,
+    },
+  };
 }
 
 export function useSummary() {

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { COMING_SOON, FEATURE_FUNCTIONS, FEATURES, sumDaily, useDaily, useRecentUsage, useUsers } from "../data";
+import { Link } from "react-router-dom";
+import { COMING_SOON, displayName, FEATURE_FUNCTIONS, FEATURES, sumDaily, useAccounts, useDaily, useRecentUsage } from "../data";
 import { dayKeyLabel, fmtMs, fmtNumber, fmtPercent, lastDayKeys } from "../format";
 import { useTheme } from "../theme";
 import { ChartFigure, ChartTooltip, ErrorNote, Loading, Page, Panel } from "../components/ui";
@@ -11,7 +12,7 @@ const SAMPLE = 1000;
 export default function Features() {
   const keys = useMemo(() => lastDayKeys(DAYS), []);
   const daily = useDaily(keys[0]);
-  const users = useUsers(5000);
+  const users = useAccounts();
   const recent = useRecentUsage(SAMPLE);
   const { colors } = useTheme();
 
@@ -31,6 +32,10 @@ export default function Features() {
       color: colors.series[i],
       calls: totals.f[f] ?? 0,
       users: users.data.filter((u) => (u.features[f] ?? 0) > 0).length,
+      top: users.data
+        .filter((u) => (u.features[f] ?? 0) > 0)
+        .sort((a, b) => (b.features[f] ?? 0) - (a.features[f] ?? 0))
+        .slice(0, 3),
       successRate: sample.length ? 1 - failed / sample.length : null,
       avgMs: sample.length ? sample.reduce((a, b) => a + b.ms, 0) / sample.length : null,
       soon: COMING_SOON.has(f),
@@ -75,6 +80,19 @@ export default function Features() {
                     <dd style={{ fontSize: "1.5rem" }}>{s.avgMs === null ? "No data" : fmtMs(s.avgMs)}</dd>
                   </div>
                 </dl>
+                <h3 style={{ marginTop: "1rem", fontSize: "0.95rem" }}>Top users</h3>
+                {s.top.length === 0 ? (
+                  <p className="muted" style={{ fontSize: "0.95rem" }}>Nobody yet.</p>
+                ) : (
+                  <ol style={{ margin: "0.25rem 0 0", paddingLeft: "1.25rem" }}>
+                    {s.top.map((u) => (
+                      <li key={u.id}>
+                        <Link to={`/users/${u.id}`}>{displayName(u, u.id)}</Link>
+                        <span className="muted">, {fmtNumber(u.features[s.feature] ?? 0)} requests</span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </li>
             ))}
             <li className="panel">
