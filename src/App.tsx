@@ -7,6 +7,7 @@ import UserDetail from "./pages/UserDetail";
 import Features from "./pages/Features";
 import Health from "./pages/Health";
 import Admins from "./pages/Admins";
+import ApiKeys from "./pages/ApiKeys";
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="users/:uid" element={<UserDetail />} />
         <Route path="features" element={<Features />} />
         <Route path="health" element={<Health />} />
+        <Route path="api-keys" element={<ApiKeys />} />
         <Route path="admins" element={<Admins />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
