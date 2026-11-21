@@ -16,7 +16,8 @@ interface Slot {
   name: string;
   model: string;
   features: string[];
-  source: "dashboard" | "server";
+  source: "dashboard" | "server" | "fallback";
+  fallbackName: string;
   last4: string;
   updatedAt: number;
   updatedBy: string;
@@ -47,8 +48,8 @@ export default function ApiKeys() {
 
   return (
     <Page
-      title="API key"
-      intro="One Google API key runs every online feature of Third Eye. A new key is tested first, and only a working key is saved. It replaces the old key and takes effect for every user within a few seconds."
+      title="API keys"
+      intro="The Google API key runs every online feature except Audio Transcriber, which has its own key. A new key is tested first, and only a working key is saved. It replaces the old key and takes effect for every user within a few seconds."
     >
       <ErrorNote error={error} />
       {loading && slots.length === 0 ? (
@@ -107,10 +108,10 @@ function KeyCard({ slot, onChanged }: { slot: Slot; onChanged: () => void }) {
   const test = () => run("test", async () => (await testKey({ slot: slot.id })).data);
 
   const remove = () => {
-    if (!window.confirm(`Remove the dashboard key for ${slot.name}? Third Eye will go back to the server key set during setup.`)) return;
+    if (!window.confirm(`Remove the dashboard key for ${slot.name}? ${slot.source === "dashboard" && slot.fallbackName ? `It will use the ${slot.fallbackName} again.` : "Third Eye will go back to the server key set during setup."}`)) return;
     run("remove", async () => {
       await deleteKey({ slot: slot.id });
-      return { ok: true, message: "Dashboard key removed. The server key is in use again." };
+      return { ok: true, message: slot.fallbackName ? `Key removed. The ${slot.fallbackName} is in use again.` : "Dashboard key removed. The server key is in use again." };
     });
   };
 
@@ -137,6 +138,8 @@ function KeyCard({ slot, onChanged }: { slot: Slot; onChanged: () => void }) {
               <>
                 Dashboard key <span className="mono">{slot.last4}</span>
               </>
+            ) : slot.source === "fallback" ? (
+              `Using the ${slot.fallbackName} until a key is saved here`
             ) : (
               "Server key (set during setup)"
             )}
