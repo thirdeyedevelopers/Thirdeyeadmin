@@ -17,7 +17,7 @@ import { httpsCallable } from "firebase/functions";
 import { db, functions } from "./firebase";
 
 /** Feature names written by the Cloud Functions. Cash Reader runs offline and is never logged. */
-export const FEATURES = ["Translator", "Image Describe", "Image OCR", "Assistant", "Navigator"] as const;
+export const FEATURES = ["Translator", "Image Describe", "Image OCR", "Assistant", "Audio Transcriber", "Navigator"] as const;
 export const COMING_SOON = new Set(["Navigator"]);
 export const OFFLINE_FEATURES = ["Cash Reader"];
 
@@ -26,6 +26,7 @@ export const FEATURE_FUNCTIONS: Record<string, string[]> = {
   "Image Describe": ["describeImage", "askImage"],
   "Image OCR": ["extractText", "translateLines"],
   Assistant: ["assistantChat"],
+  "Audio Transcriber": ["transcribeAudio", "transcriptTranslate"],
   Navigator: ["navigator"],
 };
 

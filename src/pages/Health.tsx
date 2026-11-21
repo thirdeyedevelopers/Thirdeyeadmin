@@ -66,7 +66,7 @@ export default function Health() {
                 <XAxis dataKey="day" stroke={colors.axis} tick={{ fill: colors.axis, fontSize: 12 }} />
                 <YAxis stroke={colors.axis} tick={{ fill: colors.axis, fontSize: 12 }} allowDecimals={false} />
                 <Tooltip content={<ChartTooltip />} cursor={{ fill: colors.grid }} />
-                <Bar dataKey="errors" name="Failed" fill={colors.series[4]} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="errors" name="Failed" fill={colors.series[5]} radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </ChartFigure>

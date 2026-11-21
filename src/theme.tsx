@@ -5,13 +5,13 @@ export type ThemeChoice = "system" | "light" | "dark";
 /** Series colours checked at 4.5:1 or better against the panel surface in each theme. */
 const PALETTE = {
   light: {
-    series: ["#0B57A4", "#A64B00", "#14622B", "#7A2E8C", "#9B1C1C"],
+    series: ["#0B57A4", "#A64B00", "#14622B", "#7A2E8C", "#00666B", "#9B1C1C"],
     axis: "#454545",
     grid: "#D5D8DD",
     text: "#1A1A1A",
   },
   dark: {
-    series: ["#9CCBFF", "#FFB870", "#8FE0A8", "#E3B0F0", "#FFB8B0"],
+    series: ["#9CCBFF", "#FFB870", "#8FE0A8", "#E3B0F0", "#7FDDE3", "#FFB8B0"],
     axis: "#C9CDD3",
     grid: "#363B43",
     text: "#F2F3F5",
