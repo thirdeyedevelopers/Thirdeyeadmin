@@ -132,7 +132,7 @@ export default function Features() {
                       name={f}
                       stroke={colors.series[i]}
                       strokeWidth={2.5}
-                      strokeDasharray={["", "6 4", "2 3", "10 3 2 3", "8 2", "1 4"][i]}
+                      strokeDasharray={["", "6 4", "2 3", "10 3 2 3", "8 2", "4 2 1 2", "1 4"][i]}
                       dot={false}
                     />
                   ))}

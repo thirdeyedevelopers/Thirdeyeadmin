@@ -49,7 +49,7 @@ export default function ApiKeys() {
   return (
     <Page
       title="API keys"
-      intro="The Google API key runs every online feature except Audio Transcriber, which has its own key. A new key is tested first, and only a working key is saved. It replaces the old key and takes effect for every user within a few seconds."
+      intro="The Google API key runs every online feature except Audio Transcriber and Video Transcriber, which each have their own key. A new key is tested first, and only a working key is saved. It replaces the old key and takes effect for every user within a few seconds."
     >
       <ErrorNote error={error} />
       {loading && slots.length === 0 ? (
