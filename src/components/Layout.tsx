@@ -8,7 +8,7 @@ const LINKS = [
   { to: "/users", label: "Users" },
   { to: "/features", label: "Features" },
   { to: "/health", label: "Health" },
-  { to: "/api-keys", label: "API keys" },
+  { to: "/api-keys", label: "API key" },
   { to: "/admins", label: "Admins" },
 ];
 

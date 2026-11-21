@@ -47,8 +47,8 @@ export default function ApiKeys() {
 
   return (
     <Page
-      title="API keys"
-      intro="Replace the keys Third Eye uses for its online features. A new key is tested first, and only a working key is saved. It takes effect for every user within a few seconds."
+      title="API key"
+      intro="One Google API key runs every online feature of Third Eye. A new key is tested first, and only a working key is saved. It replaces the old key and takes effect for every user within a few seconds."
     >
       <ErrorNote error={error} />
       {loading && slots.length === 0 ? (
