@@ -252,3 +252,48 @@ dialog.box .actions { display: flex; flex-wrap: wrap; justify-content: flex-end;
   min-height: 44px; padding: 0 0.75rem; font: inherit; color: var(--text);
   background: var(--surface); border: 2px solid var(--border); border-radius: 8px;
 }
+
+/* Subscriptions page */
+.sp-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 1rem; }
+.sp-stat { background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 1rem 1.25rem; }
+.sp-stat dt { color: var(--text-2); font-size: 0.85rem; font-weight: 600; }
+.sp-stat dd { margin: 0.25rem 0 0; font-size: 1.9rem; font-weight: 700; }
+.sp-hero { border: 2px solid var(--accent); background: linear-gradient(0deg, var(--surface), var(--surface)), var(--accent-soft); }
+.sp-add { display: grid; grid-template-columns: minmax(14rem, 2fr) minmax(9rem, 1fr) auto; gap: 0.75rem; align-items: end; }
+.sp-add .btn { min-height: 48px; padding: 0 1.5rem; }
+.sp-add .text-input, .sp-add select { min-height: 48px; width: 100%; }
+.sp-note { margin-top: 0.75rem; }
+.sp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.sp-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 1rem; align-items: center;
+  padding: 0.9rem 1rem; border: 1px solid var(--hairline); border-radius: 12px; background: var(--bg);
+}
+.sp-avatar {
+  width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 1.1rem;
+}
+.sp-who { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; font-weight: 600; word-break: break-all; }
+.sp-meta { color: var(--text-2); font-size: 0.9rem; margin-top: 0.2rem; }
+.sp-bar { height: 6px; border-radius: 999px; background: var(--hairline); margin-top: 0.5rem; overflow: hidden; }
+.sp-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.sp-left { text-align: right; min-width: 5.5rem; }
+.sp-left strong { display: block; font-size: 1.5rem; line-height: 1; }
+.sp-left span { color: var(--text-2); font-size: 0.8rem; }
+.sp-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: flex-end; }
+.sp-actions .btn { min-height: 40px; padding: 0 0.9rem; }
+.badge.play { color: var(--accent); background: var(--accent-soft); }
+.badge.admin { color: var(--success); background: var(--success-soft); }
+.sp-empty { text-align: center; padding: 2rem 1rem; color: var(--text-2); }
+.sp-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.sp-head h2 { margin: 0; }
+.sp-link { background: none; border: 0; padding: 0.5rem 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; min-height: 44px; }
+.sp-switch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+dialog.box .x { position: absolute; top: 0.75rem; right: 0.75rem; min-width: 44px; min-height: 44px; border-radius: 50%; border: 0; background: transparent; color: var(--text); font-size: 1.4rem; cursor: pointer; }
+dialog.box.wide { width: min(40rem, calc(100vw - 2rem)); }
+dialog.box .modal-body { display: flex; flex-direction: column; gap: 0.9rem; padding: 1.5rem; position: relative; }
+@media (max-width: 760px) {
+  .sp-add { grid-template-columns: 1fr; }
+  .sp-row { grid-template-columns: auto minmax(0, 1fr); }
+  .sp-left { text-align: left; grid-column: 2; }
+  .sp-actions { grid-column: 1 / -1; justify-content: flex-start; }
+}
