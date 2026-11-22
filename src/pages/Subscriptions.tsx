@@ -1,13 +1,15 @@
-import { CSSProperties, FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { collection, doc, DocumentData, onSnapshot } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import { functions } from "../firebase";
+import { db, functions } from "../firebase";
 import { describeError, FEATURES } from "../data";
 import { fmtDateTime } from "../format";
 import { Column, DataTable, ErrorNote, Loading, Page, Panel } from "../components/ui";
 
-// Third Eye Premium. Everything here goes through Cloud Functions (functions/billing.js), which check
-// the admin, write admin_audit_logs and never trust this page for prices or Google Play state.
+// Third Eye Premium. The list and the switch are read live from Firestore (admins only), so every
+// change shows here at once. Every change goes through Cloud Functions (functions/billing.js), which
+// check the admin, write admin_audit_logs and never trust this page for Google Play state.
 
 interface PlayInfo {
   productId: string;
@@ -20,12 +22,11 @@ interface PlayInfo {
   orderId: string;
   test: boolean;
   voided: boolean;
-  acknowledged: boolean;
   startedAt: number;
   country: string;
   checkedAt: number;
 }
-interface GrantInfo {
+interface AdminInfo {
   plan: string;
   days: number;
   startsAt: number;
@@ -33,17 +34,14 @@ interface GrantInfo {
   note: string;
   byEmail: string;
 }
-interface Status {
-  active: boolean;
-  activeUntil: number;
-  source: "play" | "gift" | "none";
-  plan: string | null;
-  play: PlayInfo | null;
-  grant: GrantInfo | null;
-}
-interface Row extends Status {
+interface Row {
   uid: string;
   email: string | null;
+  active: boolean;
+  activeUntil: number;
+  source: "play" | "admin" | "none";
+  play: PlayInfo | null;
+  admin: AdminInfo | null;
   updatedAt: number;
 }
 interface Config {
@@ -56,7 +54,6 @@ interface HistoryItem {
   kind: string;
   at: number;
   plan?: string;
-  days?: number;
   expiresAt?: number;
   byEmail?: string;
   note?: string;
@@ -66,11 +63,10 @@ interface HistoryItem {
   orderId?: string;
 }
 
-const listSubs = httpsCallable<{ uid?: string }, { rows: Row[]; config: Config }>(functions, "adminSubscriptions");
-const userSub = httpsCallable<{ uid: string }, { status: Status; history: HistoryItem[] }>(functions, "adminSubscriptions");
-const grantSub = httpsCallable<{ email: string; plan?: string; days?: number; note: string }, { email: string; status: Status }>(functions, "adminGrantSubscription");
-const revokeSub = httpsCallable<{ email: string; reason: string }, { email: string; status: Status }>(functions, "adminRevokeSubscription");
-const playAction = httpsCallable<{ uid: string; action: string; confirmOrderId?: string }, { status: Status | null }>(functions, "adminPlayAction");
+const userHistory = httpsCallable<{ uid: string }, { history: HistoryItem[] }>(functions, "adminSubscriptions");
+const addPremium = httpsCallable<{ email: string; plan?: string; days?: number; note: string }, { email: string; status: { activeUntil: number } }>(functions, "adminGrantSubscription");
+const removePremium = httpsCallable<{ email: string; reason: string }, { email: string; status: { active: boolean; activeUntil: number } }>(functions, "adminRevokeSubscription");
+const playAction = httpsCallable<{ uid: string; action: string; confirmOrderId?: string }, unknown>(functions, "adminPlayAction");
 const saveConfig = httpsCallable<{ set: true; required: boolean; freeFeatures: string[] }, Config>(functions, "adminBillingConfig");
 
 const PLANS = [
@@ -80,61 +76,153 @@ const PLANS = [
   { id: "1y", label: "1 year" },
   { id: "custom", label: "Number of days" },
 ];
+const ENTITLED = new Set(["SUBSCRIPTION_STATE_ACTIVE", "SUBSCRIPTION_STATE_IN_GRACE_PERIOD", "SUBSCRIPTION_STATE_CANCELED"]);
+const DAY = 86_400_000;
 
-const input: CSSProperties = {
-  minHeight: 44, padding: "0 0.75rem", font: "inherit", color: "var(--text)",
-  background: "var(--surface)", border: "2px solid var(--border)", borderRadius: 8,
-};
-const check: CSSProperties = { display: "flex", alignItems: "center", gap: "0.5rem", minHeight: 44, width: "fit-content" };
-
+const n = (v: unknown) => (typeof v === "number" ? v : 0);
 const date = (ms?: number | null) => (ms ? fmtDateTime(new Date(ms)) : "—");
-const typeLabel = (r: Status) =>
-  r.play && r.grant ? "Google Play + gift" : r.play ? "Google Play" : r.grant ? "Gift" : "—";
+const daysLeft = (until: number) => Math.max(0, Math.ceil((until - Date.now()) / DAY));
+const typeLabel = (r: Row) =>
+  r.play && r.admin ? "Google Play + added by admin" : r.play ? "Google Play" : r.admin ? "Added by admin" : "—";
+
+/** Same rule as the server (billing.js activeUntil): Premium is on until the later end date. */
+function toRow(uid: string, d: DocumentData, now: number): Row {
+  const p = d.play as DocumentData | undefined;
+  const g = d.grant as DocumentData | undefined;
+  const play: PlayInfo | null = p ? {
+    productId: p.productId ?? "", plan: p.plan ?? "", state: p.state ?? "", payment: p.payment ?? "",
+    autoRenew: !!p.autoRenew, trial: !!p.trial, expiresAt: n(p.expiresAt), orderId: p.orderId ?? "", test: !!p.test,
+    voided: !!p.voided, startedAt: n(p.startedAt), country: p.country ?? "", checkedAt: n(p.checkedAt),
+  } : null;
+  const admin: AdminInfo | null = g ? {
+    plan: g.plan ?? "", days: n(g.days), startsAt: n(g.startsAt), expiresAt: n(g.expiresAt), note: g.note ?? "", byEmail: g.byEmail ?? "",
+  } : null;
+  const playUntil = play && !play.voided && ENTITLED.has(play.state) && play.expiresAt > now ? play.expiresAt : 0;
+  const adminUntil = admin && admin.expiresAt > now ? admin.expiresAt : 0;
+  const until = Math.max(playUntil, adminUntil);
+  return {
+    uid, email: d.email ?? null, play, admin, updatedAt: n(d.updatedAt),
+    active: until > now, activeUntil: until,
+    source: playUntil && playUntil >= adminUntil ? "play" : adminUntil ? "admin" : "none",
+  };
+}
+
+// ------------------------------------------------------------------ the dashboard's own dialog box
+
+interface Ask {
+  title: string;
+  message: string;
+  confirm: string;
+  danger?: boolean;
+  /** Shows a text box (for a reason); its text is returned. */
+  input?: string;
+}
+
+/** Promise-based dialog box: resolves with the typed text ("" when there is no text box), or null for Cancel. */
+function useDialog() {
+  const [ask, setAsk] = useState<(Ask & { resolve: (v: string | null) => void }) | null>(null);
+  const open = (a: Ask) => new Promise<string | null>((resolve) => setAsk({ ...a, resolve }));
+  const close = (v: string | null) => {
+    ask?.resolve(v);
+    setAsk(null);
+  };
+  const element = ask ? <DialogBox ask={ask} onClose={close} /> : null;
+  return { open, element };
+}
+
+function DialogBox({ ask, onClose }: { ask: Ask; onClose: (v: string | null) => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [text, setText] = useState("");
+  const back = useRef<Element | null>(null);
+  useEffect(() => {
+    back.current = document.activeElement;
+    ref.current?.showModal();
+    return () => (back.current as HTMLElement | null)?.focus?.();
+  }, []);
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    onClose(text.trim());
+  };
+  return (
+    <dialog ref={ref} className="box" aria-labelledby="dlg-title" aria-describedby="dlg-msg" onCancel={(e) => {
+      e.preventDefault();
+      onClose(null);
+    }}>
+      <form onSubmit={submit}>
+        <h2 id="dlg-title">{ask.title}</h2>
+        <p id="dlg-msg">{ask.message}</p>
+        {ask.input !== undefined && (
+          <div className="field">
+            <label htmlFor="dlg-input">{ask.input}</label>
+            <input id="dlg-input" className="text-input" type="text" maxLength={200} value={text} onChange={(e) => setText(e.target.value)} />
+          </div>
+        )}
+        <div className="actions">
+          <button type="button" className="btn secondary" onClick={() => onClose(null)}>Cancel</button>
+          <button type="submit" className={`btn${ask.danger ? " danger" : ""}`} autoFocus={ask.input === undefined}>{ask.confirm}</button>
+        </div>
+      </form>
+    </dialog>
+  );
+}
+
+// ------------------------------------------------------------------ page
 
 export default function Subscriptions() {
-  const [rows, setRows] = useState<Row[]>([]);
+  const [raw, setRaw] = useState<{ uid: string; d: DocumentData }[] | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Row | null>(null);
-  const [prefill, setPrefill] = useState("");
+  const [selectedUid, setSelectedUid] = useState<string | null>(null);
+  const [prefill, setPrefill] = useState({ email: "", n: 0 });
+  const [now, setNow] = useState(Date.now());
+  const dialog = useDialog();
 
-  const load = () => {
-    setLoading(true);
-    listSubs({})
-      .then((r) => {
-        setRows(r.data.rows);
-        setConfig(r.data.config);
-        setSelected((s) => (s ? r.data.rows.find((x) => x.uid === s.uid) ?? null : null));
-        setError("");
-      })
-      .catch((e) => setError(describeError(e)))
-      .finally(() => setLoading(false));
-  };
-  useEffect(load, []);
+  useEffect(() => onSnapshot(collection(db, "subscriptions"),
+    (snap) => {
+      setRaw(snap.docs.map((x) => ({ uid: x.id, d: x.data() })));
+      setError("");
+    },
+    (e) => setError(describeError(e))), []);
+  useEffect(() => onSnapshot(doc(db, "billing_config", "main"), (snap) => {
+    const d = snap.exists() ? snap.data() : {};
+    setConfig({
+      required: d.required !== false,
+      freeFeatures: Array.isArray(d.freeFeatures) ? d.freeFeatures : [],
+      updatedAt: d.updatedAt?.toMillis ? d.updatedAt.toMillis() : 0,
+      updatedByEmail: d.updatedByEmail ?? null,
+    });
+  }, (e) => setError(describeError(e))), []);
+  // Premium that runs out while this page is open turns off here too.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
+  const rows = useMemo(() => (raw ?? []).map((x) => toRow(x.uid, x.d, now))
+    .sort((a, b) => Number(b.active) - Number(a.active) || b.activeUntil - a.activeUntil || b.updatedAt - a.updatedAt), [raw, now]);
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
     return q ? rows.filter((r) => (r.email ?? "").includes(q) || r.uid.toLowerCase().includes(q) || (r.play?.orderId ?? "").toLowerCase().includes(q)) : rows;
   }, [rows, search]);
-
+  const selected = rows.find((r) => r.uid === selectedUid) ?? null;
   const active = rows.filter((r) => r.active);
+
   const columns: Column<Row>[] = [
     { key: "email", label: "User", render: (r) => <Link to={`/users/${r.uid}`}>{r.email ?? r.uid}</Link> },
     { key: "status", label: "Premium", render: (r) => <span className={`badge ${r.active ? "ok" : "muted"}`}>{r.active ? "On" : "Off"}</span> },
     { key: "type", label: "Type", render: typeLabel },
-    { key: "plan", label: "Plan", render: (r) => r.plan ?? r.play?.plan ?? r.grant?.plan ?? "—" },
-    { key: "ends", label: "Ends", render: (r) => date(r.activeUntil || r.play?.expiresAt || r.grant?.expiresAt) },
+    { key: "plan", label: "Plan", render: (r) => (r.source === "admin" ? r.admin?.plan : r.play?.plan ?? r.admin?.plan) || "—" },
+    { key: "ends", label: "Ends", render: (r) => date(r.activeUntil || r.play?.expiresAt || r.admin?.expiresAt) },
+    { key: "left", label: "Days left", num: true, render: (r) => (r.active ? daysLeft(r.activeUntil) : "—") },
     {
       key: "pay", label: "Google Play payment", render: (r) => r.play
         ? `${r.play.payment}${r.play.voided ? ", refunded" : ""}${r.play.test ? " (test)" : ""}`
         : "—",
     },
-    { key: "order", label: "Order", render: (r) => <span className="mono">{r.play?.orderId || "—"}</span> },
     {
       key: "act", label: "Actions", render: (r) => (
-        <button type="button" className="btn secondary" onClick={() => setSelected(r)} aria-label={`Manage ${r.email ?? r.uid}`}>
+        <button type="button" className="btn secondary" onClick={() => setSelectedUid(r.uid)} aria-label={`Manage ${r.email ?? r.uid}`}>
           Manage
         </button>
       ),
@@ -144,36 +232,40 @@ export default function Subscriptions() {
   return (
     <Page
       title="Subscriptions"
-      intro="Third Eye Premium unlocks the online features. Google Play subscriptions are checked with Google on the server; gifts given here work at once. Every change is recorded with your email."
+      intro="Third Eye Premium unlocks the online features. Everything here updates live, and every change reaches the user's phone at once. Every change is recorded with your email."
     >
       <ErrorNote error={error} />
-      {config && <Switch config={config} onSaved={setConfig} />}
-      <GiveForm prefill={prefill} onDone={load} />
+      {config && <Switch config={config} ask={dialog.open} />}
+      <AddForm prefill={prefill} ask={dialog.open} />
       {selected && (
-        <Manage row={selected} onChanged={load} onClose={() => setSelected(null)} onExtend={(email) => {
-          setPrefill(email);
-          document.getElementById("give-email")?.focus();
+        <Manage row={selected} ask={dialog.open} onClose={() => setSelectedUid(null)} onAddTime={(email) => {
+          setPrefill((p) => ({ email, n: p.n + 1 }));
+          document.getElementById("add-email")?.focus();
         }} />
       )}
       <Panel title="Subscribers" id="h-subs" sub={`${active.length} with Premium now, ${rows.length} in total`}>
         <div className="toolbar">
           <div className="field">
             <label htmlFor="sub-search">Find by email, user ID or order</label>
-            <input id="sub-search" type="search" value={search} onChange={(e) => setSearch(e.target.value)} style={input} />
+            <input id="sub-search" type="search" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          <button type="button" className="btn secondary" onClick={load} disabled={loading}>
-            {loading ? "Loading…" : "Reload"}
-          </button>
         </div>
-        {loading && rows.length === 0 ? <Loading what="subscriptions" /> : (
+        {raw === null ? <Loading what="subscriptions" /> : (
           <DataTable caption="Third Eye Premium subscribers" rows={shown} columns={columns} empty="No subscriptions yet." />
         )}
       </Panel>
+      {dialog.element}
     </Page>
   );
 }
 
-function Switch({ config, onSaved }: { config: Config; onSaved: (c: Config) => void }) {
+type AskFn = (a: Ask) => Promise<string | null>;
+
+function Note({ msg }: { msg: { ok: boolean; text: string } | null }) {
+  return <div role="status" aria-live="polite">{msg && <p className={`message${msg.ok ? "" : " error"}`}>{msg.text}</p>}</div>;
+}
+
+function Switch({ config, ask }: { config: Config; ask: AskFn }) {
   const [required, setRequired] = useState(config.required);
   const [free, setFree] = useState<string[]>(config.freeFeatures);
   const [busy, setBusy] = useState(false);
@@ -185,14 +277,17 @@ function Switch({ config, onSaved }: { config: Config; onSaved: (c: Config) => v
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
-    if (required && !config.required &&
-        !window.confirm("Turn Premium on? From now on, people without Premium can no longer use the online features (except any marked free).")) return;
+    if (required !== config.required) {
+      const ok = await ask(required
+        ? { title: "Turn Premium on?", message: "People without Premium will no longer be able to use the online features (except any you mark free).", confirm: "Turn on" }
+        : { title: "Turn Premium off?", message: "Every feature becomes free for everyone until you turn Premium on again.", confirm: "Turn off", danger: true });
+      if (ok === null) return;
+    }
     setBusy(true);
     setMsg(null);
     try {
-      const c = (await saveConfig({ set: true, required, freeFeatures: free })).data;
-      onSaved(c);
-      setMsg({ ok: true, text: "Saved. It reaches every user within a minute." });
+      await saveConfig({ set: true, required, freeFeatures: free });
+      setMsg({ ok: true, text: "Saved. Users see it within a few seconds." });
     } catch (err) {
       setMsg({ ok: false, text: describeError(err) });
     } finally {
@@ -205,19 +300,19 @@ function Switch({ config, onSaved }: { config: Config; onSaved: (c: Config) => v
       title="Premium switch"
       id="h-switch"
       sub={<>
-        {config.required ? "Premium is required for online features." : "Premium is off: every feature is free for everyone."}
+        {config.required ? "Premium is ON: online features need Premium." : "Premium is OFF: every feature is free for everyone."}
         {config.updatedByEmail ? ` Last changed ${date(config.updatedAt)} by ${config.updatedByEmail}.` : ""}
       </>}
     >
       <form onSubmit={save} className="stack" style={{ gap: "0.5rem" }}>
-        <label style={check}>
+        <label className="check-row" style={{ display: "flex", alignItems: "center", gap: "0.5rem", minHeight: 44 }}>
           <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} style={{ width: 20, height: 20 }} />
           Require Premium for online features
         </label>
         <fieldset disabled={!required} style={{ border: 0, padding: 0, margin: 0 }}>
-          <legend className="muted">Free for everyone even when Premium is required:</legend>
+          <legend className="muted">Free for everyone even when Premium is on:</legend>
           {FEATURES.map((f) => (
-            <label key={f} style={check}>
+            <label key={f} style={{ display: "flex", alignItems: "center", gap: "0.5rem", minHeight: 44 }}>
               <input
                 type="checkbox"
                 checked={free.includes(f)}
@@ -232,12 +327,12 @@ function Switch({ config, onSaved }: { config: Config; onSaved: (c: Config) => v
           <button type="submit" className="btn" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
         </div>
       </form>
-      <div role="status" aria-live="polite">{msg && <p className={`message${msg.ok ? "" : " error"}`}>{msg.text}</p>}</div>
+      <Note msg={msg} />
     </Panel>
   );
 }
 
-function GiveForm({ prefill, onDone }: { prefill: string; onDone: () => void }) {
+function AddForm({ prefill, ask }: { prefill: { email: string; n: number }; ask: AskFn }) {
   const [email, setEmail] = useState("");
   const [plan, setPlan] = useState("1m");
   const [days, setDays] = useState("7");
@@ -245,7 +340,7 @@ function GiveForm({ prefill, onDone }: { prefill: string; onDone: () => void }) 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   useEffect(() => {
-    if (prefill) setEmail(prefill);
+    if (prefill.email) setEmail(prefill.email);
   }, [prefill]);
 
   const submit = async (e: FormEvent) => {
@@ -253,24 +348,28 @@ function GiveForm({ prefill, onDone }: { prefill: string; onDone: () => void }) 
     const address = email.trim().toLowerCase();
     if (!address.includes("@")) {
       setMsg({ ok: false, text: "Enter the user's full email address." });
-      document.getElementById("give-email")?.focus();
+      document.getElementById("add-email")?.focus();
       return;
     }
-    const n = Number(days);
-    if (plan === "custom" && (!Number.isInteger(n) || n < 1 || n > 3650)) {
+    const count = Number(days);
+    if (plan === "custom" && (!Number.isInteger(count) || count < 1 || count > 3650)) {
       setMsg({ ok: false, text: "Days must be a whole number from 1 to 3650." });
-      document.getElementById("give-days")?.focus();
+      document.getElementById("add-days")?.focus();
       return;
     }
-    const label = plan === "custom" ? `${n} days` : PLANS.find((p) => p.id === plan)?.label;
-    if (!window.confirm(`Give ${label} of Premium to ${address}? If they already have a gift, this is added to its end.`)) return;
+    const label = plan === "custom" ? `${count} days` : PLANS.find((p) => p.id === plan)?.label;
+    const ok = await ask({
+      title: "Add Premium?",
+      message: `Add ${label} of Premium to ${address}. If they already have Premium from you, the time is added to its end. They see it in the app at once.`,
+      confirm: "Add Premium",
+    });
+    if (ok === null) return;
     setBusy(true);
     setMsg(null);
     try {
-      const r = (await grantSub(plan === "custom" ? { email: address, days: n, note } : { email: address, plan, note })).data;
+      const r = (await addPremium(plan === "custom" ? { email: address, days: count, note } : { email: address, plan, note })).data;
       setMsg({ ok: true, text: `Done. ${r.email} has Premium until ${date(r.status.activeUntil)}.` });
       setNote("");
-      onDone();
     } catch (err) {
       setMsg({ ok: false, text: describeError(err) });
     } finally {
@@ -279,154 +378,173 @@ function GiveForm({ prefill, onDone }: { prefill: string; onDone: () => void }) 
   };
 
   return (
-    <Panel title="Give Premium" id="h-give" sub="The user must have signed in to the app once. Works straight away; no Google Play payment.">
+    <Panel title="Add Premium" id="h-add" sub="For any user who has signed in to the app once. Works at once; no payment.">
       <form onSubmit={submit} className="stack" style={{ gap: "0.75rem" }}>
         <div className="field">
-          <label htmlFor="give-email">User's email</label>
-          <input id="give-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" style={input} />
+          <label htmlFor="add-email">User's email</label>
+          <input id="add-email" className="text-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
         </div>
         <div className="field">
-          <label htmlFor="give-plan">Plan</label>
-          <select id="give-plan" value={plan} onChange={(e) => setPlan(e.target.value)} style={input}>
+          <label htmlFor="add-plan">How long</label>
+          <select id="add-plan" value={plan} onChange={(e) => setPlan(e.target.value)}>
             {PLANS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
         </div>
         {plan === "custom" && (
           <div className="field">
-            <label htmlFor="give-days">Days</label>
-            <input id="give-days" type="number" min={1} max={3650} value={days} onChange={(e) => setDays(e.target.value)} style={input} />
+            <label htmlFor="add-days">Days</label>
+            <input id="add-days" className="text-input" type="number" min={1} max={3650} value={days} onChange={(e) => setDays(e.target.value)} />
           </div>
         )}
         <div className="field">
-          <label htmlFor="give-note">Note (optional, only admins see it)</label>
-          <input id="give-note" type="text" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} style={input} />
+          <label htmlFor="add-note">Note (optional, only admins see it)</label>
+          <input id="add-note" className="text-input" type="text" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
         <div className="toolbar" style={{ marginBottom: 0 }}>
-          <button type="submit" className="btn" disabled={busy}>{busy ? "Giving…" : "Give Premium"}</button>
+          <button type="submit" className="btn" disabled={busy}>{busy ? "Adding…" : "Add Premium"}</button>
         </div>
       </form>
-      <div role="status" aria-live="polite">{msg && <p className={`message${msg.ok ? "" : " error"}`}>{msg.text}</p>}</div>
+      <Note msg={msg} />
     </Panel>
   );
 }
 
-function Manage({ row, onChanged, onClose, onExtend }: { row: Row; onChanged: () => void; onClose: () => void; onExtend: (email: string) => void }) {
+function Manage({ row, ask, onClose, onAddTime }: { row: Row; ask: AskFn; onClose: () => void; onAddTime: (email: string) => void }) {
   const [history, setHistory] = useState<HistoryItem[] | null>(null);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const who = row.email ?? row.uid;
+  const play = row.play;
+  const order = play?.orderId ?? "";
 
   useEffect(() => {
     setHistory(null);
-    setMsg(null);
-    userSub({ uid: row.uid }).then((r) => setHistory(r.data.history)).catch(() => setHistory([]));
+    userHistory({ uid: row.uid }).then((r) => setHistory(r.data.history)).catch(() => setHistory([]));
   }, [row.uid, row.updatedAt]);
+  useEffect(() => setMsg(null), [row.uid]);
 
-  const run = async (kind: string, question: string | null, work: () => Promise<string>) => {
-    if (question && !window.confirm(question)) return;
+  const run = async (kind: string, a: Ask, work: (text: string) => Promise<string>) => {
+    const text = await ask(a);
+    if (text === null) return;
     setBusy(kind);
     setMsg(null);
     try {
-      setMsg({ ok: true, text: await work() });
-      onChanged();
+      setMsg({ ok: true, text: await work(text) });
     } catch (err) {
       setMsg({ ok: false, text: describeError(err) });
     } finally {
       setBusy("");
     }
   };
-
-  const play = row.play;
-  const order = play?.orderId ?? "";
-  const doPlay = (action: string, question: string, done: string) =>
-    run(action, question, async () => {
+  const doPlay = (action: string, a: Ask, done: string) =>
+    run(action, a, async () => {
       await playAction({ uid: row.uid, action, confirmOrderId: order });
       return done;
     });
 
   return (
-    <Panel title={`Manage ${who}`} id="h-manage" sub={`Premium ${row.active ? `on until ${date(row.activeUntil)}` : "off"} · ${typeLabel(row)}`}>
+    <Panel title={`Manage ${who}`} id="h-manage" sub={`Premium ${row.active ? `on until ${date(row.activeUntil)} (${daysLeft(row.activeUntil)} days left)` : "off"} · ${typeLabel(row)}`}>
       <dl className="grid two" style={{ margin: "0 0 1rem" }}>
         <div className="stat">
-          <dt>Google Play</dt>
+          <dt>Google Play subscription</dt>
           <dd style={{ fontSize: "1rem" }}>
             {play ? (
               <>
                 {play.plan}, {play.payment}{play.voided ? ", refunded" : ""}{play.test ? " (test purchase)" : ""}
                 <div className="muted">
-                  Ends {date(play.expiresAt)} · auto-renew {play.autoRenew ? "on" : "off"} · started {date(play.startedAt)}
+                  Started {date(play.startedAt)} · ends {date(play.expiresAt)} · renews automatically: {play.autoRenew ? "yes" : "no"}
                   {play.country ? ` · ${play.country}` : ""}
                 </div>
-                <div className="muted">Order <span className="mono">{play.orderId || "—"}</span> · checked {date(play.checkedAt)}</div>
+                <div className="muted">Order <span className="mono">{play.orderId || "—"}</span></div>
               </>
-            ) : "No Google Play subscription"}
+            ) : "None"}
           </dd>
         </div>
         <div className="stat">
-          <dt>Gift</dt>
+          <dt>Premium added by admin</dt>
           <dd style={{ fontSize: "1rem" }}>
-            {row.grant ? (
+            {row.admin ? (
               <>
-                {row.grant.plan} ({row.grant.days} days), ends {date(row.grant.expiresAt)}
-                <div className="muted">by {row.grant.byEmail}{row.grant.note ? ` · ${row.grant.note}` : ""}</div>
+                {row.admin.plan}: {date(row.admin.startsAt)} to {date(row.admin.expiresAt)}
+                <div className="muted">by {row.admin.byEmail}{row.admin.note ? ` · ${row.admin.note}` : ""}</div>
               </>
-            ) : "No gift"}
+            ) : "None"}
           </dd>
         </div>
       </dl>
 
       <div className="toolbar">
         {row.email && (
-          <button type="button" className="btn secondary" onClick={() => onExtend(row.email!)} disabled={!!busy}>
-            Give or extend a gift
+          <button type="button" className="btn secondary" onClick={() => onAddTime(row.email!)} disabled={!!busy}>
+            Add more time
           </button>
         )}
-        {row.grant && row.email && (
-          <button type="button" className="btn secondary" disabled={!!busy} onClick={() => {
-            const reason = window.prompt(`Remove the gift from ${who}? Google Play subscriptions are not touched. Reason (optional):`);
-            if (reason === null) return;
-            run("revoke", null, async () => {
-              const r = (await revokeSub({ email: row.email!, reason })).data;
-              return r.status.active ? `Gift removed. Premium stays on until ${date(r.status.activeUntil)} from Google Play.` : "Gift removed. Premium is off.";
-            });
-          }}>
-            {busy === "revoke" ? "Removing…" : "Remove gift"}
+        {row.admin && row.email && (
+          <button type="button" className="btn secondary" disabled={!!busy} onClick={() => run("remove", {
+            title: "Remove Premium?",
+            message: `Remove the Premium you added for ${who}. It ends now and their phone shows it at once.${play ? " Their Google Play subscription is not touched." : ""}`,
+            confirm: "Remove Premium",
+            danger: true,
+            input: "Reason (optional)",
+          }, async (reason) => {
+            const r = (await removePremium({ email: row.email!, reason })).data;
+            return r.status.active ? `Removed. Premium stays on until ${date(r.status.activeUntil)} because of their Google Play subscription.` : "Removed. Premium is off.";
+          })}>
+            {busy === "remove" ? "Removing…" : "Remove Premium"}
           </button>
         )}
         {play && (
           <>
-            <button type="button" className="btn secondary" disabled={!!busy} onClick={() => run("refresh", null, async () => {
-              await playAction({ uid: row.uid, action: "refresh" });
-              return "Read again from Google Play.";
-            })}>
-              {busy === "refresh" ? "Reading…" : "Refresh from Google Play"}
+            <button type="button" className="btn secondary" disabled={!!busy} onClick={async () => {
+              setBusy("refresh");
+              setMsg(null);
+              try {
+                await playAction({ uid: row.uid, action: "refresh" });
+                setMsg({ ok: true, text: "Updated from Google Play." });
+              } catch (err) {
+                setMsg({ ok: false, text: describeError(err) });
+              } finally {
+                setBusy("");
+              }
+            }}>
+              {busy === "refresh" ? "Checking…" : "Check Google Play again"}
             </button>
             <button type="button" className="btn secondary" disabled={!!busy || !play.autoRenew}
-              onClick={() => doPlay("cancel", `Stop renewing ${who}'s Google Play subscription? They keep Premium until ${date(play.expiresAt)}.`, "Renewal cancelled. Premium stays until the end date.")}>
-              {busy === "cancel" ? "Cancelling…" : "Cancel renewal"}
+              onClick={() => doPlay("cancel", {
+                title: "Stop renewing?",
+                message: `${who} will not be charged again. Premium stays on until ${date(play.expiresAt)}.`,
+                confirm: "Stop renewing",
+              }, "Renewal stopped. Premium stays until the end date.")}>
+              {busy === "cancel" ? "Stopping…" : "Stop renewing"}
             </button>
             <button type="button" className="btn secondary" disabled={!!busy}
-              onClick={() => doPlay("refund", `Refund order ${order} for ${who}? They keep Premium until the end date. This cannot be undone.`, "Refunded. Premium stays until the end date.")}>
+              onClick={() => doPlay("refund", {
+                title: "Refund the last payment?",
+                message: `Order ${order} for ${who} is refunded. Premium stays on until the end date. This cannot be undone.`,
+                confirm: "Refund",
+                danger: true,
+              }, "Refunded. Premium stays until the end date.")}>
               {busy === "refund" ? "Refunding…" : "Refund"}
             </button>
             <button type="button" className="btn secondary" disabled={!!busy}
-              onClick={() => doPlay("refund_revoke", `Refund order ${order} for ${who} AND end Premium now? This cannot be undone.`, "Refunded and Premium from Google Play ended.")}>
-              {busy === "refund_revoke" ? "Refunding…" : "Refund and end access"}
+              onClick={() => doPlay("refund_revoke", {
+                title: "Refund and remove Premium?",
+                message: `Order ${order} for ${who} is refunded and Premium from Google Play ends now. This cannot be undone.`,
+                confirm: "Refund and remove",
+                danger: true,
+              }, "Refunded and Premium removed.")}>
+              {busy === "refund_revoke" ? "Refunding…" : "Refund and remove Premium"}
             </button>
           </>
         )}
         <button type="button" className="btn secondary" onClick={onClose}>Close</button>
       </div>
-      <div role="status" aria-live="polite">{msg && <p className={`message${msg.ok ? "" : " error"}`}>{msg.text}</p>}</div>
+      <Note msg={msg} />
 
       <h3>History</h3>
       {history === null ? <Loading what="history" /> : history.length === 0 ? <p className="empty">No history yet.</p> : (
         <ul>
-          {history.map((h, i) => (
-            <li key={i}>
-              {date(h.at)}: {historyText(h)}
-            </li>
-          ))}
+          {history.map((h, i) => <li key={i}>{date(h.at)}: {historyText(h)}</li>)}
         </ul>
       )}
     </Panel>
@@ -435,9 +553,9 @@ function Manage({ row, onChanged, onClose, onExtend }: { row: Row; onChanged: ()
 
 function historyText(h: HistoryItem): string {
   switch (h.kind) {
-    case "gift": return `Gift of ${h.plan} by ${h.byEmail}, until ${date(h.expiresAt)}${h.note ? ` (${h.note})` : ""}`;
-    case "gift.removed": return `Gift removed by ${h.byEmail}${h.reason ? ` (${h.reason})` : ""}`;
-    case "play.voided": return `Google Play payment refunded or charged back, order ${h.orderId}`;
+    case "gift": return `Premium added by ${h.byEmail} (${h.plan}), until ${date(h.expiresAt)}${h.note ? `: ${h.note}` : ""}`;
+    case "gift.removed": return `Premium removed by ${h.byEmail}${h.reason ? `: ${h.reason}` : ""}`;
+    case "play.voided": return `Google Play payment refunded, order ${h.orderId}`;
     default: return `Google Play: ${(h.state ?? "").replace("SUBSCRIPTION_STATE_", "").toLowerCase()}, ${h.productId}, order ${h.orderId}`;
   }
 }
